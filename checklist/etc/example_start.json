@@ -1,0 +1,11 @@
+{
+  "id": "checklist-1",
+  "items": [
+      { "id": "item-1", "text": "Please confirm item one." },
+      { "id": "item-2", "text": "Please confirm item two." }
+  ],
+  "confirmIntent": "ChecklistConfirm",
+  "disconfirmIntent": "ChecklistDisconfirm",
+  "cancelIntent": "ChecklistCancel",
+  "endText": "Checklist is complete."
+}
