@@ -18,6 +18,7 @@ from enum import Enum
 
 import paho.mqtt.client as mqtt
 import rhasspyhermes.cli as hermes_cli
+from dataclasses_json import LetterCase, dataclass_json
 from rhasspyhermes.base import Message
 from rhasspyhermes.client import GeneratorType, HermesClient
 from rhasspyhermes.dialogue import (
@@ -30,13 +31,13 @@ from rhasspyhermes.dialogue import (
     DialogueStartSession,
 )
 from rhasspyhermes.nlu import NluIntent
-from rhasspyhermes.utils import only_fields
 
 _LOGGER = logging.getLogger("checklist")
 
 # -----------------------------------------------------------------------------
 
 
+@dataclass_json(letter_case=LetterCase.CAMEL)
 @dataclass
 class ChecklistItem:
     """Single item from a checklist."""
@@ -48,18 +49,13 @@ class ChecklistItem:
     text: str
 
     # Intent to confirm item (overrides start message)
-    confirmIntent: typing.Optional[str] = None
+    confirm_intent: typing.Optional[str] = None
 
     # Intent to disconfirm item (overrides start message)
-    disconfirmIntent: typing.Optional[str] = None
+    disconfirm_intent: typing.Optional[str] = None
 
     # Intent to cancel checklist (overrides start message)
-    cancelIntent: typing.Optional[str] = None
-
-    @classmethod
-    def from_dict(cls, item_dict: typing.Dict[str, typing.Any]):
-        """Parse message from dictionary."""
-        return cls(**only_fields(cls, item_dict))
+    cancel_intent: typing.Optional[str] = None
 
 
 @dataclass
@@ -76,24 +72,16 @@ class StartChecklist(Message):
     endText: str = ""
 
     # Default intent to confirm items
-    confirmIntent: typing.Optional[str] = None
+    confirm_intent: typing.Optional[str] = None
 
     # Default intent to disconfirm items
-    disconfirmIntent: typing.Optional[str] = None
+    disconfirm_intent: typing.Optional[str] = None
 
     # Default intent to cancel checklist
-    cancelIntent: typing.Optional[str] = None
+    cancel_intent: typing.Optional[str] = None
 
     # Hermes siteID
-    siteId: str = "default"
-
-    @classmethod
-    def from_dict(cls, message_dict: typing.Dict[str, typing.Any]):
-        """Parse message from dictionary."""
-        items = message_dict.pop("items", [])
-        items = [ChecklistItem.from_dict(item) for item in items]
-
-        return cls(items=items, **only_fields(cls, message_dict))
+    site_id: str = "default"
 
     @classmethod
     def topic(cls, **kwargs) -> str:
@@ -131,13 +119,13 @@ class ChecklistFinished(Message):
     status: ChecklistFinishStatus
 
     # Item identifiers that were confirmed
-    confirmedIds: typing.List[str] = field(default_factory=list)
+    confirmed_ids: typing.List[str] = field(default_factory=list)
 
     # Item identifier when checklist was cancelled
-    cancelledId: typing.Optional[str] = None
+    cancelled_id: typing.Optional[str] = None
 
-    # Hermes siteId
-    siteId: str = "default"
+    # Hermes site_id
+    site_id: str = "default"
 
     @classmethod
     def topic(cls, **kwargs) -> str:
@@ -151,11 +139,11 @@ class ChecklistFinished(Message):
 class ChecklistClient(HermesClient):
     """Listens for and responds to checklist messages."""
 
-    def __init__(self, mqtt_client, siteIds: typing.Optional[typing.List[str]] = None):
-        super().__init__("checklist", mqtt_client, siteIds=siteIds)
+    def __init__(self, mqtt_client, site_ids: typing.Optional[typing.List[str]] = None):
+        super().__init__("checklist", mqtt_client, site_ids=site_ids)
 
         self.checklist_items: typing.Deque[ChecklistItem] = deque()
-        self.sessionId = ""
+        self.session_id = ""
         self.current_item: typing.Optional[ChecklistItem] = None
         self.start_message: typing.Optional[StartChecklist] = None
         self.finished_message: typing.Optional[ChecklistFinished] = None
@@ -176,18 +164,20 @@ class ChecklistClient(HermesClient):
         self.finished_message = ChecklistFinished(
             id=start_message.id,
             status=ChecklistFinishStatus.UNKNOWN,
-            siteId=start_message.siteId,
+            site_id=start_message.site_id,
         )
-        self.sessionId = ""
+        self.session_id = ""
         self.checklist_items = deque(start_message.items)
 
         # Complete intents with defaults
         for item in self.checklist_items:
-            item.confirmIntent = item.confirmIntent or self.start_message.confirmIntent
-            item.disconfirmIntent = (
-                item.disconfirmIntent or self.start_message.disconfirmIntent
+            item.confirm_intent = (
+                item.confirm_intent or self.start_message.confirm_intent
             )
-            item.cancelIntent = item.cancelIntent or self.start_message.cancelIntent
+            item.disconfirm_intent = (
+                item.disconfirm_intent or self.start_message.disconfirm_intent
+            )
+            item.cancel_intent = item.cancel_intent or self.start_message.cancel_intent
 
         _LOGGER.debug(self.checklist_items)
 
@@ -196,9 +186,9 @@ class ChecklistClient(HermesClient):
         intent_filter = [
             intent
             for intent in [
-                self.current_item.confirmIntent,
-                self.current_item.disconfirmIntent,
-                self.current_item.cancelIntent,
+                self.current_item.confirm_intent,
+                self.current_item.disconfirm_intent,
+                self.current_item.cancel_intent,
             ]
             if intent
         ]
@@ -208,13 +198,13 @@ class ChecklistClient(HermesClient):
         # Start new session
         yield DialogueStartSession(
             init=DialogueAction(
-                canBeEnqueued=True,
+                can_be_enqueued=True,
                 text=self.current_item.text,
-                intentFilter=intent_filter,
-                sendIntentNotRecognized=True,
+                intent_filter=intent_filter,
+                send_intent_not_recognized=True,
             ),
-            customData=self.start_message.id,
-            siteId=start_message.siteId,
+            custom_data=self.start_message.id,
+            site_id=start_message.site_id,
         )
 
     async def maybe_next_item(self, nlu_intent: NluIntent):
@@ -223,14 +213,14 @@ class ChecklistClient(HermesClient):
         assert self.start_message, "No start message"
         assert self.finished_message, "No finished message"
 
-        if nlu_intent.intent.intentName == self.current_item.cancelIntent:
+        if nlu_intent.intent.intent_name == self.current_item.cancel_intent:
             _LOGGER.debug("Cancelled on item %s", self.current_item)
-            self.finished_message.cancelledId = self.current_item.id
+            self.finished_message.cancelled_id = self.current_item.id
             self.checklist_items.clear()
-        elif nlu_intent.intent.intentName == self.current_item.confirmIntent:
+        elif nlu_intent.intent.intent_name == self.current_item.confirm_intent:
             _LOGGER.debug("Confirmed item %s", self.current_item)
-            self.finished_message.confirmedIds.append(self.current_item.id)
-        elif nlu_intent.intent.intentName == self.current_item.disconfirmIntent:
+            self.finished_message.confirmed_ids.append(self.current_item.id)
+        elif nlu_intent.intent.intent_name == self.current_item.disconfirm_intent:
             _LOGGER.debug("Disconfirmed item %s", self.current_item)
 
         if self.checklist_items:
@@ -243,7 +233,7 @@ class ChecklistClient(HermesClient):
         else:
             # End session
             yield DialogueEndSession(
-                sessionId=self.sessionId, text=self.start_message.endText
+                session_id=self.session_id, text=self.start_message.endText
             )
 
     async def repeat_item(self):
@@ -253,9 +243,9 @@ class ChecklistClient(HermesClient):
         intent_filter = [
             intent
             for intent in [
-                self.current_item.confirmIntent,
-                self.current_item.disconfirmIntent,
-                self.current_item.cancelIntent,
+                self.current_item.confirm_intent,
+                self.current_item.disconfirm_intent,
+                self.current_item.cancel_intent,
             ]
             if intent
         ]
@@ -263,10 +253,10 @@ class ChecklistClient(HermesClient):
         assert intent_filter, "Need confirm/disconfirm/cancel intent"
 
         yield DialogueContinueSession(
-            sessionId=self.sessionId,
+            session_id=self.session_id,
             text=self.current_item.text,
-            intentFilter=intent_filter,
-            sendIntentNotRecognized=True,
+            intent_filter=intent_filter,
+            send_intent_not_recognized=True,
         )
 
     async def end_checklist(self):
@@ -275,11 +265,11 @@ class ChecklistClient(HermesClient):
         assert self.finished_message, "No finished message"
 
         # Determine status
-        if self.finished_message.cancelledId:
+        if self.finished_message.cancelled_id:
             self.finished_message.status = ChecklistFinishStatus.CANCELLED
-        elif len(self.start_message.items) == len(self.finished_message.confirmedIds):
+        elif len(self.start_message.items) == len(self.finished_message.confirmed_ids):
             self.finished_message.status = ChecklistFinishStatus.ALL_CONFIRMED
-        elif self.finished_message.confirmedIds:
+        elif self.finished_message.confirmed_ids:
             self.finished_message.status = ChecklistFinishStatus.SOME_CONFIRMED
         else:
             self.finished_message.status = ChecklistFinishStatus.NONE_CONFIRMED
@@ -289,14 +279,14 @@ class ChecklistClient(HermesClient):
         # Reset
         self.start_message = None
         self.finished_message = None
-        self.sessionId = ""
+        self.session_id = ""
         self.current_item = None
 
     async def on_message(
         self,
         message: Message,
-        siteId: typing.Optional[str] = None,
-        sessionId: typing.Optional[str] = None,
+        site_id: typing.Optional[str] = None,
+        session_id: typing.Optional[str] = None,
         topic: typing.Optional[str] = None,
     ) -> GeneratorType:
         """Received message from MQTT broker."""
@@ -309,21 +299,23 @@ class ChecklistClient(HermesClient):
                     yield start_message
             elif isinstance(message, DialogueSessionStarted):
                 # hermes/dialogueManager/sessionStarted
-                if self.start_message and (message.customData == self.start_message.id):
-                    self.sessionId = message.sessionId
+                if self.start_message and (
+                    message.custom_data == self.start_message.id
+                ):
+                    self.session_id = message.session_id
             elif isinstance(message, NluIntent):
-                # hermes/intent/<intentName>
-                if message.sessionId == self.sessionId:
+                # hermes/intent/<intent_name>
+                if message.session_id == self.session_id:
                     async for next_message in self.maybe_next_item(message):
                         yield next_message
             elif isinstance(message, DialogueIntentNotRecognized):
                 # hermes/dialogueManager/intentNotRecognized
-                if message.sessionId == self.sessionId:
+                if message.session_id == self.session_id:
                     async for repeat_message in self.repeat_item():
                         yield repeat_message
             elif isinstance(message, DialogueSessionEnded):
                 # hermes/dialogueManager/sessionEnded
-                if message.sessionId == self.sessionId:
+                if message.session_id == self.session_id:
                     async for end_message in self.end_checklist():
                         yield end_message
             else:
@@ -350,7 +342,7 @@ def main():
 
     # Create MQTT client
     mqtt_client = mqtt.Client()
-    hermes_client = ChecklistClient(mqtt_client, siteIds=args.siteId)
+    hermes_client = ChecklistClient(mqtt_client, site_ids=args.site_id)
 
     # Try to connect
     _LOGGER.debug("Connecting to %s:%s", args.host, args.port)
